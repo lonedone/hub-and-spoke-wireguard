@@ -1,0 +1,76 @@
+---
+- name: Install hub&spoke vpn
+  hosts: all
+  become: yes
+  become_user: root
+  pre_tasks:
+    - name: Transform wireguard_clients addresses with respect to network CIDR block
+      set_fact:
+        wireguard_clients_with_address: "{{ (wireguard_clients_with_address | default([])) + [item | combine({'address': wireguard_network_ranges | ansible.utils.ipaddr(item.address_number|string) | ansible.utils.ipaddr('address') | ansible.utils.ipaddr('host') | join(', ') }) ]  }}"
+      loop: "{{ wireguard_clients }}"
+      loop_control:
+        loop_var: item
+    - name: Set wireguard_clients
+      set_fact:
+        wireguard_clients: "{{ wireguard_clients_with_address }}"
+
+    - name: Transform wireguard_direct_clients addresses with respect to network CIDR block
+      set_fact:
+        wireguard_direct_clients_with_address: "{{ (wireguard_direct_clients_with_address | default([])) + [item | combine({'address': wireguard_network_ranges | ansible.utils.ipaddr(item.address_number|string) | ansible.utils.ipaddr('address') | ansible.utils.ipaddr('host') | join(', ') }) ]  }}"
+      loop: "{{ wireguard_direct_clients }}"
+      loop_control:
+        loop_var: item
+    - name: Set wireguard_direct_clients
+      set_fact:
+        wireguard_direct_clients: "{{ wireguard_direct_clients_with_address }}"
+
+    - name: Build the wireguard_clients variable
+      ansible.builtin.set_fact:
+        wireguard_unmanaged_peers: "{{ wireguard_unmanaged_peers | combine ({item.name: {'public_key': item.public_key, 'allowed_ips': item.address}}) }}"
+      with_items: "{{ (inventory_hostname == 'hub') | ternary(wireguard_clients, wireguard_direct_clients) }}"
+      when: inventory_hostname == "hub" or inventory_hostname == "internet_gateway"
+  roles:
+    - githubixx.ansible_role_wireguard
+  post_tasks:
+    - name: Set hub public key fact
+      ansible.builtin.set_fact:
+        wireguard_public_key: "{{ wireguard__fact_public_key }}"
+      when: inventory_hostname == "hub" or inventory_hostname == "internet_gateway"
+
+- name: Create client configs
+  hosts: 127.0.0.1
+  pre_tasks:
+    - name: Transform wireguard_clients addresses with respect to network CIDR block
+      set_fact:
+        wireguard_clients_with_address: "{{ (wireguard_clients_with_address | default([])) + [item | combine({'address': wireguard_network_ranges | ansible.utils.ipaddr(item.address_number|string) | ansible.utils.ipaddr('address') | ansible.utils.ipaddr('host') | join(', ') }) ]  }}"
+      loop: "{{ wireguard_clients }}"
+      loop_control:
+        loop_var: item
+    - name: Set wireguard_clients
+      set_fact:
+        wireguard_clients: "{{ wireguard_clients_with_address }}"
+  tasks:
+    - name: Build client configs
+      ansible.builtin.template:
+        src: ./templates/client.conf.j2
+        dest: ./client_configs/{{ item.name }}.conf
+      with_items: "{{ wireguard_clients }}"
+      
+- name: Create direct client configs
+  hosts: 127.0.0.1
+  pre_tasks:
+    - name: Transform wireguard_direct_clients addresses with respect to network CIDR block
+      set_fact:
+        wireguard_direct_clients_with_address: "{{ (wireguard_direct_clients_with_address | default([])) + [item | combine({'address': wireguard_network_ranges | ansible.utils.ipaddr(item.address_number|string) | ansible.utils.ipaddr('address') | ansible.utils.ipaddr('host') | join(', ') }) ]  }}"
+      loop: "{{ wireguard_direct_clients }}"
+      loop_control:
+        loop_var: item
+    - name: Set wireguard_direct_clients
+      set_fact:
+        wireguard_direct_clients: "{{ wireguard_direct_clients_with_address }}"
+  tasks:
+    - name: Build direct client configs
+      ansible.builtin.template:
+        src: ./templates/client_direct.conf.j2
+        dest: ./client_configs/{{ item.name }}_direct.conf
+      with_items: "{{ wireguard_direct_clients }}"

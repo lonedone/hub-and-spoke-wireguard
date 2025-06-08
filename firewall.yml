@@ -1,0 +1,60 @@
+- name: Configure WireGuard server with UFW
+  hosts: internet_gateway
+  become: true
+  tasks:
+    
+    - name: Allow WireGuard port through UFW
+      ufw:
+        rule: allow
+        port: '51822'
+        proto: udp
+        state: enabled
+      notify:
+        - Reload UFW
+
+    - name: Allow all traffic from VPN subnet (10.0.0.0/24)
+      ufw:
+        rule: allow
+        from_ip: '10.0.0.0/24'
+        to_ip: 'any'
+        state: enabled
+      notify:
+        - Reload UFW
+
+    - name: Enable IP forwarding for IPv4
+      sysctl:
+        name: net.ipv4.ip_forward
+        value: 1
+        state: present
+        reload: yes
+      notify:
+        - Reload UFW
+
+    - name: Enable IP forwarding for IPv6
+      sysctl:
+        name: net.ipv6.conf.all.forwarding
+        value: 1
+        state: present
+        reload: yes
+      notify:
+        - Reload UFW
+
+    - name: Allow routing from wg0 (WireGuard) to enp1s0 (internet-facing interface)
+      ufw:
+        rule: allow
+        interface_in: wg0
+        interface_out: enp1s0
+        route: yes
+        state: enabled
+      notify:
+        - Reload UFW
+
+    - name: Ensure UFW is enabled
+      service:
+        name: ufw
+        state: started
+        enabled: yes
+
+  handlers:
+    - name: Reload UFW
+      command: ufw reload

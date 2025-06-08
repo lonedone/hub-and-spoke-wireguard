@@ -2,3 +2,4 @@ group_vars/all/secrets.yml
 client_configs/**/*.conf
 inventory.yml
 README_serv.md
+optional_*

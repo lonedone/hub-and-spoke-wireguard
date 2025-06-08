@@ -1,0 +1,19 @@
+wireguard_hostname: "{{ ansible_host }}"
+wireguard_endpoint: "{{ wireguard_hostname }}"
+wireguard_port: 51823
+wireguard_private_key: "{{ wireguard_hub_private_key }}"
+wireguard_allowed_ips: "10.0.0.0/24, fd10::/56"
+wireguard_addresses:
+  - "{{ wireguard_network_ranges | ansible.utils.ipaddr('1') | ansible.utils.ipaddr('address') | ansible.utils.ipaddr('host') | join(', ') }}"
+wireguard_persistent_keepalive: 25
+wireguard_table: "123"
+wireguard_preup:
+  - sysctl -w net.ipv4.ip_forward=1
+  - ip rule add iif wg0 table 123 priority 456
+  - sysctl -w net.ipv6.conf.all.forwarding=1
+  - ip -6 rule add iif wg0 table 123 priority 456
+wireguard_postdown:
+  - ip rule del iif wg0 table 123 priority 456
+  - ip -6 rule del iif wg0 table 123 priority 456
+
+wireguard_unmanaged_peers: {}

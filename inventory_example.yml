@@ -1,0 +1,10 @@
+all:
+  hosts:
+    hub:
+      ansible_host: 127.0.0.1
+      ansible_user: my_user
+      ansible_become_pass: my_user_pass
+    internet_gateway:
+      ansible_host: 127.0.0.1
+      ansible_user: my_user
+      ansible_become_pass: my_user_pass

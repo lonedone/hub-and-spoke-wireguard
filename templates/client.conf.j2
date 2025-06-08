@@ -1,0 +1,12 @@
+# local settings for the client "{{ item.name }}"
+[Interface]
+PrivateKey = {{ item.private_key }}
+Address = {{ item.address }}
+ListenPort = 51821
+DNS = 8.8.8.8
+
+# remote settings for Hub
+[Peer]
+PublicKey = {{ hostvars["hub"].wireguard_public_key }}
+Endpoint = {{ hostvars["hub"].wireguard_endpoint }}:{{ hostvars["hub"].wireguard_port }}
+AllowedIPs = 0.0.0.0/0, ::/0
