@@ -1,5 +1,5 @@
 wireguard_endpoint: "{{ ansible_host }}"
-wireguard_port: 51822
+wireguard_port: 443
 wireguard_private_key: "{{ wireguard_internet_gateway_private_key }}"
 wireguard_allowed_ips: "0.0.0.0/0, ::/0"
 wireguard_addresses:

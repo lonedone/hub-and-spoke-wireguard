@@ -1,12 +1,14 @@
 - name: Configure WireGuard server with UFW
-  hosts: internet_gateway
+  hosts: 
+    - internet_gateway
+    - hub
   become: true
   tasks:
     
     - name: Allow WireGuard port through UFW
       ufw:
         rule: allow
-        port: '51822'
+        port: '{{ wireguard_port }}'
         proto: udp
         state: enabled
       notify:
