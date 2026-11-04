@@ -1,5 +1,6 @@
 wireguard_endpoint: "{{ ansible_host }}"
 wireguard_port: 443
+wireguard_native_port: 51822
 wireguard_private_key: "{{ wireguard_internet_gateway_private_key }}"
 wireguard_allowed_ips: "0.0.0.0/0, ::/0"
 wireguard_addresses:
@@ -15,7 +16,14 @@ wireguard_preup:
   # IPv6 masquerading
   - ip6tables -t mangle -A PREROUTING -i wg0 -j MARK --set-mark 0x30
   - ip6tables -t nat -A POSTROUTING ! -o wg0 -m mark --mark 0x30 -j MASQUERADE
+  # Additional native UDP entry point, sharing the existing wg0 keys and peers.
+  # Restrict to local destinations so forwarded Internet traffic is unaffected.
+  - iptables -t nat -C PREROUTING -p udp --dport {{ wireguard_native_port }} -m addrtype --dst-type LOCAL -j REDIRECT --to-ports {{ wireguard_port }} || iptables -t nat -A PREROUTING -p udp --dport {{ wireguard_native_port }} -m addrtype --dst-type LOCAL -j REDIRECT --to-ports {{ wireguard_port }}
+  - ip6tables -t nat -C PREROUTING -p udp --dport {{ wireguard_native_port }} -m addrtype --dst-type LOCAL -j REDIRECT --to-ports {{ wireguard_port }} || ip6tables -t nat -A PREROUTING -p udp --dport {{ wireguard_native_port }} -m addrtype --dst-type LOCAL -j REDIRECT --to-ports {{ wireguard_port }}
 wireguard_postdown:
+  # On the first upgrade wg-quick down may read these hooks before they were installed.
+  - iptables -t nat -D PREROUTING -p udp --dport {{ wireguard_native_port }} -m addrtype --dst-type LOCAL -j REDIRECT --to-ports {{ wireguard_port }} 2>/dev/null || true
+  - ip6tables -t nat -D PREROUTING -p udp --dport {{ wireguard_native_port }} -m addrtype --dst-type LOCAL -j REDIRECT --to-ports {{ wireguard_port }} 2>/dev/null || true
   - iptables -t mangle -D PREROUTING -i wg0 -j MARK --set-mark 0x30
   - iptables -t nat -D POSTROUTING ! -o wg0 -m mark --mark 0x30 -j MASQUERADE
   - ip6tables -t mangle -D PREROUTING -i wg0 -j MARK --set-mark 0x30

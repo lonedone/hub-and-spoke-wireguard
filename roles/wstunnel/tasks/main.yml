@@ -1,0 +1,118 @@
+---
+- name: Validate wstunnel configuration before changing either host
+  ansible.builtin.assert:
+    that:
+      - ansible_system == 'Linux'
+      - ansible_service_mgr == 'systemd'
+      - ansible_architecture in wstunnel_architectures
+      - "ansible_play_hosts_all | sort == ['hub', 'internet_gateway']"
+      - wstunnel_server_name is match('^[A-Za-z0-9][A-Za-z0-9.-]*[A-Za-z0-9]$')
+      - wstunnel_port | int > 0 and wstunnel_port | int < 65536
+      - wstunnel_local_port | int > 1023 and wstunnel_local_port | int < 65536
+      - wstunnel_local_port | int != hostvars['hub'].wireguard_port | int
+      - wstunnel_mtu | int >= 1280 and wstunnel_mtu | int <= 1420
+      - wstunnel_tls_certificate is match('^/[A-Za-z0-9_./-]+$')
+      - wstunnel_tls_private_key is match('^/[A-Za-z0-9_./-]+$')
+      - wireguard_dc is not defined
+      - not (wireguard_save_config | default(false) | bool)
+    fail_msg: >-
+      Configure the TLS hostname, certificate paths and valid ports; run against both
+      hub and internet_gateway on systemd Linux (amd64/arm64). Custom wireguard_dc
+      and SaveConfig are incompatible with this transport.
+
+- name: Validate the shared authentication secret
+  ansible.builtin.assert:
+    that:
+      - wstunnel_path_secret is match('^[a-fA-F0-9]{64,128}$')
+    fail_msg: Set wstunnel_path_secret to 32-64 random bytes encoded as hexadecimal.
+  no_log: true
+
+- name: Inspect gateway TLS files
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    follow: true
+  loop:
+    - "{{ wstunnel_tls_certificate }}"
+    - "{{ wstunnel_tls_private_key }}"
+  register: wstunnel_tls_files
+  when: inventory_hostname == 'internet_gateway'
+
+- name: Require existing gateway TLS files
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.isreg
+    fail_msg: Provision the gateway TLS certificate and key before enabling wstunnel.
+  loop: "{{ wstunnel_tls_files.results | default([]) }}"
+  when: inventory_hostname == 'internet_gateway'
+
+- name: Install certificate trust and archive tools
+  ansible.builtin.package:
+    name:
+      - ca-certificates
+      - tar
+    state: present
+
+- name: Create versioned installation directory
+  ansible.builtin.file:
+    path: "{{ wstunnel_install_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Download checksum-pinned wstunnel archive
+  ansible.builtin.get_url:
+    url: "https://github.com/erebe/wstunnel/releases/download/v{{ wstunnel_version }}/wstunnel_{{ wstunnel_version }}_linux_{{ wstunnel_architectures[ansible_architecture] }}.tar.gz"
+    dest: "{{ wstunnel_install_dir }}/release.tar.gz"
+    checksum: "sha256:{{ wstunnel_checksums[wstunnel_architectures[ansible_architecture]] }}"
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Extract wstunnel
+  ansible.builtin.unarchive:
+    src: "{{ wstunnel_install_dir }}/release.tar.gz"
+    dest: "{{ wstunnel_install_dir }}"
+    remote_src: true
+    creates: "{{ wstunnel_install_dir }}/wstunnel"
+
+- name: Create private wstunnel configuration directory
+  ansible.builtin.file:
+    path: /etc/wstunnel
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Install authentication environment
+  ansible.builtin.template:
+    src: authentication.env.j2
+    dest: /etc/wstunnel/authentication.env
+    owner: root
+    group: root
+    mode: '0600'
+  no_log: true
+  notify: Restart wstunnel
+
+- name: Install wstunnel systemd unit
+  ansible.builtin.template:
+    src: wstunnel.service.j2
+    dest: /etc/systemd/system/wstunnel.service
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Restart wstunnel
+
+- name: Apply wstunnel service changes before configuring WireGuard
+  ansible.builtin.meta: flush_handlers
+
+- name: Start and enable wstunnel
+  ansible.builtin.systemd_service:
+    name: wstunnel
+    daemon_reload: true
+    enabled: true
+    state: started
+
+- name: Configure the inter-server peer transport
+  ansible.builtin.import_tasks: configure_peer.yml

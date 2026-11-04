@@ -1,0 +1,11 @@
+# Leave false for the original native WireGuard transport.
+wstunnel_enabled: false
+wstunnel_port: 443
+wstunnel_local_port: 51824
+wstunnel_mtu: 1380
+# Set these in group_vars/all/secrets.yml (preferably Ansible Vault).
+wstunnel_server_name: ""
+wstunnel_path_secret: ""
+# Existing files on internet_gateway, renewed outside this playbook.
+wstunnel_tls_certificate: ""
+wstunnel_tls_private_key: ""

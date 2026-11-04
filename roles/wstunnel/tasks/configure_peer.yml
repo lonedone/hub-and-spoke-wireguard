@@ -1,0 +1,13 @@
+---
+# The pinned upstream template selects the remote host's dc endpoint when
+# the two names differ. Public wireguard_endpoint/port variables stay intact.
+- name: Select loopback endpoints for the managed inter-server peer
+  ansible.builtin.set_fact:
+    wireguard_dc:
+      name: "wstunnel-{{ inventory_hostname }}"
+      endpoint: 127.0.0.1
+      port: "{{ wstunnel_local_port if inventory_hostname == 'internet_gateway' else 9 }}"
+    # The upstream role reads keepalive from the REMOTE host's variables.
+    wireguard_persistent_keepalive: "{{ 25 if inventory_hostname == 'internet_gateway' else 0 }}"
+    # wg-quick would otherwise derive an oversized MTU from the loopback route.
+    wireguard_mtu: "{{ wstunnel_mtu }}"

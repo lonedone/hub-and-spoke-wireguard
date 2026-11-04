@@ -1,0 +1,34 @@
+[Unit]
+Description=WireGuard hub-gateway transport over TLS WebSocket
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+DynamicUser=yes
+EnvironmentFile=/etc/wstunnel/authentication.env
+{% if inventory_hostname == 'hub' %}
+ExecStart={{ wstunnel_install_dir }}/wstunnel client --tls-verify-certificate --websocket-ping-frequency 20s -L udp://127.0.0.1:{{ wstunnel_local_port }}:127.0.0.1:{{ hostvars['internet_gateway'].wireguard_port }}?timeout_sec=0 wss://{{ wstunnel_server_name }}:{{ wstunnel_port }}
+CapabilityBoundingSet=
+{% else %}
+LoadCredential=server.crt:{{ wstunnel_tls_certificate }}
+LoadCredential=server.key:{{ wstunnel_tls_private_key }}
+ExecStart={{ wstunnel_install_dir }}/wstunnel server --tls-certificate %d/server.crt --tls-private-key %d/server.key --restrict-to 127.0.0.1:{{ wireguard_port }} wss://0.0.0.0:{{ wstunnel_port }}
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+{% endif %}
+Restart=always
+RestartSec=5s
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
