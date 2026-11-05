@@ -6,25 +6,39 @@
       - ansible_service_mgr == 'systemd'
       - ansible_architecture in wstunnel_architectures
       - "ansible_play_hosts_all | sort == ['hub', 'internet_gateway']"
+      - wstunnel_certificate_mode in ['private', 'external']
       - wstunnel_server_name is match('^[A-Za-z0-9][A-Za-z0-9.-]*[A-Za-z0-9]$')
+      - wstunnel_certificate_mode != 'private' or (wstunnel_server_name | ansible.utils.ipv4('address')) != false
       - wstunnel_port | int > 0 and wstunnel_port | int < 65536
       - wstunnel_local_port | int > 1023 and wstunnel_local_port | int < 65536
       - wstunnel_local_port | int != hostvars['hub'].wireguard_port | int
       - wstunnel_mtu | int >= 1280 and wstunnel_mtu | int <= 1420
-      - wstunnel_tls_certificate is match('^/[A-Za-z0-9_./-]+$')
-      - wstunnel_tls_private_key is match('^/[A-Za-z0-9_./-]+$')
+      - wstunnel_certificate_mode != 'external' or wstunnel_tls_certificate is match('^/[A-Za-z0-9_./-]+$')
+      - wstunnel_certificate_mode != 'external' or wstunnel_tls_private_key is match('^/[A-Za-z0-9_./-]+$')
       - wireguard_dc is not defined
       - not (wireguard_save_config | default(false) | bool)
     fail_msg: >-
-      Configure the TLS hostname, certificate paths and valid ports; run against both
+      Set a gateway IPv4 address for private certificates, or hostname/certificate
+      paths for external certificates. Use valid ports and run against both
       hub and internet_gateway on systemd Linux (amd64/arm64). Custom wireguard_dc
       and SaveConfig are incompatible with this transport.
+
+- name: Validate private certificate lifetimes
+  ansible.builtin.assert:
+    that:
+      - wstunnel_certificate_validity_days | string is match('^[1-9][0-9]*$')
+      - wstunnel_ca_validity_days | string is match('^[1-9][0-9]*$')
+      - wstunnel_certificate_renew_before_days | string is match('^[1-9][0-9]*$')
+      - wstunnel_ca_validity_days | int > wstunnel_certificate_validity_days | int
+      - wstunnel_certificate_renew_before_days | int < wstunnel_certificate_validity_days | int
+    fail_msg: Use positive integer days, with CA lifetime greater than server lifetime and renewal window smaller than server lifetime.
+  when: wstunnel_certificate_mode == 'private'
 
 - name: Validate the shared authentication secret
   ansible.builtin.assert:
     that:
-      - wstunnel_path_secret is match('^[a-fA-F0-9]{64,128}$')
-    fail_msg: Set wstunnel_path_secret to 32-64 random bytes encoded as hexadecimal.
+      - wstunnel_path_secret == '' or wstunnel_path_secret is match('^[a-fA-F0-9]{64,128}$')
+    fail_msg: Leave wstunnel_path_secret empty for generation, or use 32-64 random bytes encoded as hexadecimal.
   no_log: true
 
 - name: Inspect gateway TLS files
@@ -35,7 +49,9 @@
     - "{{ wstunnel_tls_certificate }}"
     - "{{ wstunnel_tls_private_key }}"
   register: wstunnel_tls_files
-  when: inventory_hostname == 'internet_gateway'
+  when:
+    - inventory_hostname == 'internet_gateway'
+    - wstunnel_certificate_mode == 'external'
 
 - name: Require existing gateway TLS files
   ansible.builtin.assert:
@@ -44,13 +60,16 @@
       - item.stat.isreg
     fail_msg: Provision the gateway TLS certificate and key before enabling wstunnel.
   loop: "{{ wstunnel_tls_files.results | default([]) }}"
-  when: inventory_hostname == 'internet_gateway'
+  when:
+    - inventory_hostname == 'internet_gateway'
+    - wstunnel_certificate_mode == 'external'
 
 - name: Install certificate trust and archive tools
   ansible.builtin.package:
     name:
       - ca-certificates
       - tar
+      - openssl
     state: present
 
 - name: Create versioned installation directory
@@ -77,6 +96,25 @@
     remote_src: true
     creates: "{{ wstunnel_install_dir }}/wstunnel"
 
+# Release archive permissions are not a contract. DynamicUser must be able to
+# traverse the installation directories and execute the binary on every run,
+# including upgrades where unarchive is skipped because the binary exists.
+- name: Set installation permissions for the unprivileged wstunnel service
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: "{{ item.state }}"
+    owner: root
+    group: root
+    mode: '0755'
+  loop:
+    - path: "{{ wstunnel_install_dir | dirname }}"
+      state: directory
+    - path: "{{ wstunnel_install_dir }}"
+      state: directory
+    - path: "{{ wstunnel_install_dir }}/wstunnel"
+      state: file
+  notify: Restart wstunnel
+
 - name: Create private wstunnel configuration directory
   ansible.builtin.file:
     path: /etc/wstunnel
@@ -84,6 +122,18 @@
     owner: root
     group: root
     mode: '0700'
+
+- name: Generate and distribute the private certificate authority
+  ansible.builtin.import_tasks: private_certificate.yml
+  when: wstunnel_certificate_mode == 'private'
+
+- name: Select gateway certificate files
+  ansible.builtin.set_fact:
+    wstunnel_effective_tls_certificate: "{{ '/etc/wstunnel/pki/server.crt' if wstunnel_certificate_mode == 'private' else wstunnel_tls_certificate }}"
+    wstunnel_effective_tls_private_key: "{{ '/etc/wstunnel/pki/server.key' if wstunnel_certificate_mode == 'private' else wstunnel_tls_private_key }}"
+
+- name: Prepare shared authentication secret
+  ansible.builtin.import_tasks: authentication.yml
 
 - name: Install authentication environment
   ansible.builtin.template:

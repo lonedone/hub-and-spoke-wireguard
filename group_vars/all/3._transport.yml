@@ -1,11 +1,19 @@
 # Leave false for the original native WireGuard transport.
-wstunnel_enabled: false
+# Set to true to use wstunnel as a wrapper communication between the hub and the internet gateway.
+wstunnel_enabled: true
 wstunnel_port: 443
 wstunnel_local_port: 51824
 wstunnel_mtu: 1380
-# Set these in group_vars/all/secrets.yml (preferably Ansible Vault).
-wstunnel_server_name: ""
+# Private mode generates certificates for the gateway's IPv4 address.
+wstunnel_certificate_mode: private
+wstunnel_server_name: "{{ hostvars['internet_gateway'].ansible_host }}"
+# Private certificate lifetimes in days. The CA must outlive a server certificate.
+wstunnel_certificate_validity_days: 3649
+wstunnel_ca_validity_days: 3650
+wstunnel_certificate_renew_before_days: 30
+# Set wstunnel_path_secret in secrets.yml as a hexidecimal value containing 32 to 64 bytes
+# Leaving empty triggers persistent random sequence generation
 wstunnel_path_secret: ""
-# Existing files on internet_gateway, renewed outside this playbook.
+# Only used with wstunnel_certificate_mode: external.
 wstunnel_tls_certificate: ""
 wstunnel_tls_private_key: ""

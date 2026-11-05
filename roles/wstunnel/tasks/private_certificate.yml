@@ -1,0 +1,148 @@
+---
+- name: Prepare certificates on the gateway
+  when: inventory_hostname == 'internet_gateway'
+  block:
+    - name: Install the certificate module dependency
+      ansible.builtin.package:
+        name: python3-cryptography
+        state: present
+
+    - name: Create the private PKI directory
+      ansible.builtin.file:
+        path: /etc/wstunnel/pki
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+
+    - name: Create the private CA key
+      community.crypto.openssl_privatekey:
+        path: /etc/wstunnel/pki/ca.key
+        type: ECC
+        curve: secp256r1
+        mode: '0600'
+
+    - name: Create the CA signing request
+      community.crypto.openssl_csr:
+        path: /etc/wstunnel/pki/ca.csr
+        privatekey_path: /etc/wstunnel/pki/ca.key
+        common_name: WireGuard transport private CA
+        basic_constraints:
+          - 'CA:TRUE'
+          - 'pathlen:0'
+        basic_constraints_critical: true
+        key_usage:
+          - keyCertSign
+          - cRLSign
+        key_usage_critical: true
+        mode: '0600'
+
+    - name: Inspect existing CA certificate
+      ansible.builtin.stat:
+        path: /etc/wstunnel/pki/ca.crt
+      register: wstunnel_ca_file
+
+    - name: Check CA renewal window
+      community.crypto.x509_certificate_info:
+        path: /etc/wstunnel/pki/ca.crt
+        valid_at:
+          renewal: '+{{ wstunnel_certificate_renew_before_days }}d'
+          # Ensure a freshly issued server certificate will not outlive its CA.
+          signing: '+{{ wstunnel_certificate_validity_days }}d'
+      register: wstunnel_ca_info
+      when: wstunnel_ca_file.stat.exists
+
+    - name: Read the existing CA certificate lifetime in whole days
+      ansible.builtin.set_fact:
+        wstunnel_existing_ca_validity_days: >-
+          {{ (((wstunnel_ca_info.not_after | default('19700101000000Z') | to_datetime('%Y%m%d%H%M%SZ')) -
+               (wstunnel_ca_info.not_before | default('19700101000000Z') | to_datetime('%Y%m%d%H%M%SZ'))).total_seconds() / 86400) | int }}
+
+    - name: Create or renew the private CA certificate
+      community.crypto.x509_certificate:
+        path: /etc/wstunnel/pki/ca.crt
+        privatekey_path: /etc/wstunnel/pki/ca.key
+        csr_path: /etc/wstunnel/pki/ca.csr
+        provider: selfsigned
+        selfsigned_not_before: '-5m'
+        selfsigned_not_after: '+{{ wstunnel_ca_validity_days }}d'
+        force: >-
+          {{ not (wstunnel_ca_info.valid_at.renewal | default(false)) or
+             not (wstunnel_ca_info.valid_at.signing | default(false)) or
+             wstunnel_existing_ca_validity_days | int != wstunnel_ca_validity_days | int }}
+        mode: '0644'
+      register: wstunnel_ca_certificate
+
+    - name: Create the gateway TLS key
+      community.crypto.openssl_privatekey:
+        path: /etc/wstunnel/pki/server.key
+        type: ECC
+        curve: secp256r1
+        mode: '0600'
+      notify: Restart wstunnel
+
+    - name: Create a certificate request for the gateway IP address
+      community.crypto.openssl_csr:
+        path: /etc/wstunnel/pki/server.csr
+        privatekey_path: /etc/wstunnel/pki/server.key
+        subject_alt_name:
+          - "IP:{{ wstunnel_server_name }}"
+        basic_constraints:
+          - 'CA:FALSE'
+        basic_constraints_critical: true
+        key_usage:
+          - digitalSignature
+        key_usage_critical: true
+        extended_key_usage:
+          - serverAuth
+        mode: '0600'
+
+    - name: Inspect existing gateway certificate
+      ansible.builtin.stat:
+        path: /etc/wstunnel/pki/server.crt
+      register: wstunnel_server_certificate_file
+
+    - name: Check gateway certificate renewal window
+      community.crypto.x509_certificate_info:
+        path: /etc/wstunnel/pki/server.crt
+        valid_at:
+          renewal: '+{{ wstunnel_certificate_renew_before_days }}d'
+      register: wstunnel_server_certificate_info
+      when: wstunnel_server_certificate_file.stat.exists
+
+    - name: Read the existing gateway certificate lifetime in whole days
+      ansible.builtin.set_fact:
+        wstunnel_existing_certificate_validity_days: >-
+          {{ (((wstunnel_server_certificate_info.not_after | default('19700101000000Z') | to_datetime('%Y%m%d%H%M%SZ')) -
+               (wstunnel_server_certificate_info.not_before | default('19700101000000Z') | to_datetime('%Y%m%d%H%M%SZ'))).total_seconds() / 86400) | int }}
+
+    - name: Issue or renew the gateway certificate
+      community.crypto.x509_certificate:
+        path: /etc/wstunnel/pki/server.crt
+        csr_path: /etc/wstunnel/pki/server.csr
+        ownca_path: /etc/wstunnel/pki/ca.crt
+        ownca_privatekey_path: /etc/wstunnel/pki/ca.key
+        provider: ownca
+        ownca_not_before: '-5m'
+        ownca_not_after: '+{{ wstunnel_certificate_validity_days }}d'
+        force: >-
+          {{ wstunnel_ca_certificate.changed or
+             not (wstunnel_server_certificate_info.valid_at.renewal | default(false)) or
+             wstunnel_existing_certificate_validity_days | int != wstunnel_certificate_validity_days | int }}
+        mode: '0644'
+      notify: Restart wstunnel
+
+    - name: Read the public CA certificate for the hub
+      ansible.builtin.slurp:
+        src: /etc/wstunnel/pki/ca.crt
+      register: wstunnel_ca_public_certificate
+
+- name: Install the CA certificate for the hub's wstunnel process only
+  ansible.builtin.copy:
+    content: "{{ hostvars['internet_gateway'].wstunnel_ca_public_certificate.content | b64decode }}"
+    dest: /etc/wstunnel/ca.crt
+    owner: root
+    group: root
+    mode: '0644'
+  when: inventory_hostname == 'hub'
+  notify: Restart wstunnel
