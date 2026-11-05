@@ -1,14 +1,37 @@
 - name: Configure WireGuard server with UFW
-  hosts: internet_gateway
+  hosts: 
+    - internet_gateway
+    - hub
   become: true
   tasks:
+    - name: Allow wstunnel TLS transport on the internet gateway
+      community.general.ufw:
+        rule: allow
+        port: '{{ wstunnel_port }}'
+        proto: tcp
+        comment: WireGuard wstunnel transport
+      when:
+        - inventory_hostname == 'internet_gateway'
+        - wstunnel_enabled | default(false) | bool
+      notify:
+        - Reload UFW
     
     - name: Allow WireGuard port through UFW
       ufw:
         rule: allow
-        port: '51822'
+        port: '{{ wireguard_port }}'
         proto: udp
         state: enabled
+      notify:
+        - Reload UFW
+
+    - name: Allow legacy direct WireGuard clients on the internet gateway
+      community.general.ufw:
+        rule: allow
+        port: '{{ wireguard_native_port }}'
+        proto: udp
+        comment: Legacy direct WireGuard clients
+      when: inventory_hostname == 'internet_gateway'
       notify:
         - Reload UFW
 

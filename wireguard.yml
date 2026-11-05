@@ -3,7 +3,19 @@
   hosts: all
   become: yes
   become_user: root
+  any_errors_fatal: true
+  vars:
+    # Transport changes include MTU; wg syncconf does not apply wg-quick fields.
+    wireguard_interface_restart: true
   pre_tasks:
+    - name: Validate the gateway legacy WireGuard port
+      ansible.builtin.assert:
+        that:
+          - wireguard_native_port | int > 0 and wireguard_native_port | int < 65536
+          - wireguard_native_port | int != wireguard_port | int
+        fail_msg: The legacy UDP port must be valid and different from the WireGuard listener.
+      when: inventory_hostname == 'internet_gateway'
+
     - name: Transform wireguard_clients addresses with respect to network CIDR block
       set_fact:
         wireguard_clients_with_address: "{{ (wireguard_clients_with_address | default([])) + [item | combine({'address': wireguard_network_ranges | ansible.utils.ipaddr(item.address_number|string) | ansible.utils.ipaddr('address') | ansible.utils.ipaddr('host') | join(', ') }) ]  }}"
@@ -30,8 +42,19 @@
       with_items: "{{ (inventory_hostname == 'hub') | ternary(wireguard_clients, wireguard_direct_clients) }}"
       when: inventory_hostname == "hub" or inventory_hostname == "internet_gateway"
   roles:
+    - role: wstunnel
+      when: wstunnel_enabled | default(false) | bool
     - githubixx.ansible_role_wireguard
   post_tasks:
+    - name: Apply WireGuard configuration before transport cleanup
+      ansible.builtin.meta: flush_handlers
+
+    - name: Clean up disabled TCP transport
+      ansible.builtin.include_role:
+        name: wstunnel
+        tasks_from: disable
+      when: not (wstunnel_enabled | default(false) | bool)
+
     - name: Set hub public key fact
       ansible.builtin.set_fact:
         wireguard_public_key: "{{ wireguard__fact_public_key }}"

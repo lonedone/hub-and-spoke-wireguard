@@ -1,0 +1,46 @@
+---
+- name: Generate a persistent secret on the gateway when none is supplied
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - rand
+      - -hex
+      - -out
+      - /etc/wstunnel/path-secret
+      - '32'
+    creates: /etc/wstunnel/path-secret
+  when:
+    - inventory_hostname == 'internet_gateway'
+    - wstunnel_path_secret == ''
+  no_log: true
+
+- name: Protect the generated secret
+  ansible.builtin.file:
+    path: /etc/wstunnel/path-secret
+    owner: root
+    group: root
+    mode: '0600'
+  when:
+    - inventory_hostname == 'internet_gateway'
+    - wstunnel_path_secret == ''
+
+- name: Read the gateway secret for distribution over Ansible SSH
+  ansible.builtin.slurp:
+    src: /etc/wstunnel/path-secret
+  register: wstunnel_generated_secret
+  when:
+    - inventory_hostname == 'internet_gateway'
+    - wstunnel_path_secret == ''
+  no_log: true
+
+- name: Select the shared secret on both hosts
+  ansible.builtin.set_fact:
+    wstunnel_effective_path_secret: "{{ wstunnel_path_secret if wstunnel_path_secret != '' else (hostvars['internet_gateway'].wstunnel_generated_secret.content | b64decode | trim) }}"
+  no_log: true
+
+- name: Validate the stored or supplied secret
+  ansible.builtin.assert:
+    that:
+      - wstunnel_effective_path_secret is match('^[a-fA-F0-9]{64,128}$')
+    fail_msg: The gateway's stored authentication secret is invalid.
+  no_log: true
